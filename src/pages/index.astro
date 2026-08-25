@@ -1,0 +1,34 @@
+---
+import Layout from "../layouts/Layout.astro";
+---
+
+<Layout
+  title="An instrument"
+  description="A browser-based instrument: drag or press keys to play a live-synthesised pentatonic pad, no wrong notes."
+>
+  <header>
+    <nav aria-label="Primary">
+      <a href="./">Home</a>
+    </nav>
+  </header>
+  <main>
+    <h1>An instrument</h1>
+    <p class="instrument-hint">
+      Drag the pad, or play <kbd>a s d f g h j k l ;</kbd> with
+      <kbd>&uarr;</kbd>/<kbd>&darr;</kbd> for brightness.
+    </p>
+    <button id="start" class="start-button" type="button" aria-pressed="false">
+      &#9658; Play
+    </button>
+    <div
+      id="pad"
+      class="pad"
+      role="application"
+      tabindex="0"
+      aria-label="Pitch and volume pad. Drag anywhere, or use A S D F G H J K L semicolon to play notes and Up/Down arrows to change brightness."
+    >
+      <div id="cursor" class="pad-cursor" aria-hidden="true"></div>
+    </div>
+  </main>
+  <script src="../scripts/main.ts"></script>
+</Layout>

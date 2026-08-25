@@ -1,0 +1,130 @@
+body {
+  margin: 0;
+  padding: 2rem;
+  font-family: system-ui, sans-serif;
+  line-height: 1.6;
+  color: #1a1a1a;
+}
+
+main {
+  max-width: 48rem;
+  margin: 0 auto;
+}
+
+a {
+  color: #0b5fff;
+}
+
+.instrument-hint {
+  color: #555;
+  font-size: 0.9rem;
+}
+
+.instrument-hint kbd {
+  font-family: ui-monospace, monospace;
+  background: #eee;
+  border: 1px solid #ccc;
+  border-radius: 0.25rem;
+  padding: 0 0.3rem;
+}
+
+.start-button {
+  display: block;
+  margin: 0 auto 1.5rem;
+  padding: 0.75rem 2rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #fff;
+  background: hsl(260 70% 45%);
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: 0 0 0 0 hsl(260 70% 45% / 0.5);
+  animation: start-pulse 2.2s ease-in-out infinite;
+}
+
+.start-button[aria-pressed="true"] {
+  background: hsl(0 0% 40%);
+  animation: none;
+  box-shadow: none;
+}
+
+@keyframes start-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 hsl(260 70% 45% / 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 1rem hsl(260 70% 45% / 0);
+  }
+}
+
+.pad {
+  position: relative;
+  width: 100%;
+  min-height: 60vh;
+  border-radius: 1rem;
+  background: radial-gradient(circle at 50% 50%, hsl(260 60% 30%), hsl(260 60% 10%));
+  overflow: hidden;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.pad:focus-visible {
+  outline: 3px solid hsl(260 90% 75%);
+  outline-offset: 2px;
+}
+
+/* Decorative "come touch me" glow, centred, CSS-only: independent of the
+   real cursor's position so it never fights the JS-driven transform below. */
+.pad::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3rem;
+  height: 3rem;
+  margin: -1.5rem;
+  border-radius: 50%;
+  background: hsl(260 80% 65% / 0.4);
+  opacity: 0;
+}
+
+.pad.is-idle::before {
+  opacity: 0.4;
+  animation: idle-pulse 2.2s ease-in-out infinite;
+}
+
+@keyframes idle-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.3;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.6;
+  }
+}
+
+/* Functional cursor: always positioned by JS via `transform: translate()`,
+   in pixels relative to the pad's own top-left corner (see main.ts). */
+.pad-cursor {
+  --hue: 260;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 3rem;
+  height: 3rem;
+  margin: -1.5rem;
+  border-radius: 50%;
+  background: hsl(var(--hue) 80% 65%);
+  box-shadow: 0 0 2rem 0.5rem hsl(var(--hue) 80% 65% / 0.6);
+  opacity: 0;
+  transform: translate(-100%, -100%) scale(1);
+  will-change: transform, opacity;
+}
+
+.pad.is-active .pad-cursor {
+  opacity: 0.9;
+}
