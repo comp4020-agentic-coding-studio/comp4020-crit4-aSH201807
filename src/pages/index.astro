@@ -36,6 +36,20 @@ import Layout from "../layouts/Layout.astro";
       tabindex="0"
       aria-label="Pitch and volume pad. Drag anywhere, or use A S D F G H J K L semicolon to play notes and Up/Down arrows to change brightness."
     >
+      <svg id="stamps" class="pad-stamps" aria-hidden="true">
+        <defs>
+          <pattern
+            id="stamp-stripes"
+            width="10"
+            height="10"
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(45)"
+          >
+            <rect width="10" height="10" fill="transparent"></rect>
+            <rect width="4" height="10" fill="black"></rect>
+          </pattern>
+        </defs>
+      </svg>
       <div id="cursor" class="pad-cursor" aria-hidden="true"></div>
     </div>
   </main>

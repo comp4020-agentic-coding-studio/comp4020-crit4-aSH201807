@@ -151,6 +151,35 @@ a {
   }
 }
 
+/* Attack stamps: one shape per note-on, spawned and positioned by JS in
+   pixel units matching .pad-cursor's coordinate space (see spawnStamp in
+   main.ts). Shape = scale degree, fill state = hollow/solid/striped cycling
+   on rapid repeats of the same note. Self-removed after the fade-out. */
+.pad-stamps {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.pad-stamp--hollow path:first-child {
+  fill: none;
+  stroke: hsl(var(--hue) 80% 65%);
+  stroke-width: 6;
+}
+
+.pad-stamp--solid path:first-child,
+.pad-stamp--striped path:first-child {
+  fill: hsl(var(--hue) 80% 65%);
+  stroke: none;
+}
+
+.pad-stamp-overlay {
+  fill: url(#stamp-stripes);
+  opacity: 0.3;
+}
+
 /* Functional cursor: always positioned by JS via `transform: translate()`,
    in pixels relative to the pad's own top-left corner (see main.ts). */
 .pad-cursor {

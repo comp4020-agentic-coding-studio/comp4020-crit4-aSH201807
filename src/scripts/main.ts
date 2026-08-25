@@ -6,6 +6,7 @@
 const startButtonEl = document.getElementById("start");
 const padEl = document.getElementById("pad");
 const cursorEl = document.getElementById("cursor");
+const stampsEl = document.getElementById("stamps");
 const recordButtonEl = document.getElementById("record");
 const playButtonEl = document.getElementById("playback");
 
@@ -13,10 +14,13 @@ if (
   !(startButtonEl instanceof HTMLButtonElement) ||
   !(padEl instanceof HTMLDivElement) ||
   !(cursorEl instanceof HTMLDivElement) ||
+  !(stampsEl instanceof SVGSVGElement) ||
   !(recordButtonEl instanceof HTMLButtonElement) ||
   !(playButtonEl instanceof HTMLButtonElement)
 ) {
-  throw new Error("instrument: expected #start, #pad, #cursor, #record and #playback in the DOM");
+  throw new Error(
+    "instrument: expected #start, #pad, #cursor, #stamps, #record and #playback in the DOM",
+  );
 }
 
 // Re-bind to non-nullable consts: narrowing above doesn't survive into the
@@ -24,6 +28,7 @@ if (
 const startButton: HTMLButtonElement = startButtonEl;
 const pad: HTMLDivElement = padEl;
 const cursor: HTMLDivElement = cursorEl;
+const stamps: SVGSVGElement = stampsEl;
 const recordButton: HTMLButtonElement = recordButtonEl;
 const playButton: HTMLButtonElement = playButtonEl;
 
@@ -49,13 +54,21 @@ const STEPS = Array.from({ length: OCTAVES }, (_, octave) =>
 ).flat();
 const KEYBOARD_KEYS = ["a", "s", "d", "f", "g", "h", "j", "k", "l", ";"];
 
+function xToStepIndex(t: number): number {
+  return clamp(Math.floor(t * STEPS.length), 0, STEPS.length - 1);
+}
+
 function xyToFreq(t: number): number {
-  const index = clamp(Math.floor(t * STEPS.length), 0, STEPS.length - 1);
-  return ROOT_HZ * 2 ** (STEPS[index] / 12);
+  return ROOT_HZ * 2 ** (STEPS[xToStepIndex(t)] / 12);
 }
 
 function yToParams(u: number): { gain: number; cutoff: number } {
   return { gain: lerp(0.03, 0.28, u), cutoff: expLerp(300, 4000, u) };
+}
+
+function gainScaleFactor(y: number): number {
+  const { gain } = yToParams(y);
+  return lerp(0.7, 1.4, (gain - 0.03) / (0.28 - 0.03));
 }
 
 interface Voice {
@@ -64,6 +77,7 @@ interface Voice {
   filter: BiquadFilterNode;
   x: number;
   y: number;
+  holdTimer: number;
 }
 
 const voices = new Map<string, Voice>();
@@ -134,7 +148,15 @@ function noteOn(id: string, x: number, y: number): void {
   filter.connect(gain);
   gain.connect(masterGain);
   osc.start(now);
-  voices.set(id, { osc, gain, filter, x, y });
+  const voice: Voice = { osc, gain, filter, x, y, holdTimer: 0 };
+  voices.set(id, voice);
+  // While held, keep re-stamping at the current position on the same
+  // cadence as a rapid re-tap, so a long press escalates the fill just
+  // like tapping the same note repeatedly does.
+  voice.holdTimer = window.setInterval(() => {
+    const rect = pad.getBoundingClientRect();
+    spawnAttackStamp(voice.x, voice.y, voice.x * rect.width, (1 - voice.y) * rect.height);
+  }, HOLD_INTERVAL_MS);
 }
 
 function noteUpdate(id: string, x: number, y: number): void {
@@ -153,6 +175,7 @@ function noteUpdate(id: string, x: number, y: number): void {
 function noteOff(id: string): void {
   const voice = voices.get(id);
   if (!voice || !audioCtx) return;
+  window.clearInterval(voice.holdTimer);
   recordEvent("off", id);
   const now = audioCtx.currentTime;
   const { osc, gain, filter } = voice;
@@ -175,11 +198,99 @@ function syncActiveState(): void {
 }
 
 function visualize(px: number, py: number, y: number): void {
-  const { gain } = yToParams(y);
-  const scale = lerp(0.7, 1.4, (gain - 0.03) / (0.28 - 0.03));
+  const scale = gainScaleFactor(y);
   const hue = lerp(260, 20, y);
   cursor.style.transform = `translate(${px}px, ${py}px) scale(${scale.toFixed(3)})`;
   cursor.style.setProperty("--hue", hue.toFixed(1));
+}
+
+// One low-poly shape per pentatonic degree (a 100x100 local box, centred on
+// (50,50)) -- degree = stepIndex % SCALE_DEGREES.length picks the shape,
+// octave picks its base size. Paths drawn by hand, not generated, so they
+// stay simple, readable polygons rather than perfect regular ones.
+const SHAPE_PATHS = [
+  "M50,10 L84.64,70 L15.36,70 Z", // triangle
+  "M22,22 L78,22 L78,78 L22,78 Z", // square
+  "M50,10 L90,50 L50,90 L10,50 Z", // diamond
+  "M36,14 L64,14 L64,36 L86,36 L86,64 L64,64 L64,86 L36,86 L36,64 L14,64 L14,36 L36,36 Z", // cross
+  "M50,10 L88.04,37.64 L73.51,82.36 L26.49,82.36 L11.96,37.64 Z", // pentagon
+];
+
+const FILL_STATES = ["hollow", "solid", "striped"] as const;
+type FillState = (typeof FILL_STATES)[number];
+
+// Rapid re-attacks of the *same* scale step cycle the fill state -- one
+// counter per step, not per voice id, so it tracks "the same note again"
+// regardless of which finger/key produced it. A held note re-runs the same
+// check on a timer (HOLD_INTERVAL_MS < REPEAT_WINDOW_MS), so holding down
+// escalates the fill exactly like tapping the same note repeatedly does.
+const REPEAT_WINDOW_MS = 400;
+const HOLD_INTERVAL_MS = 350;
+const STAMP_FADE_MS = 550;
+const lastAttackAt: number[] = new Array(STEPS.length).fill(-Infinity);
+const fillCycle: number[] = new Array(STEPS.length).fill(0);
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function spawnStamp(
+  px: number,
+  py: number,
+  shapeIndex: number,
+  fill: FillState,
+  hue: number,
+  diameterPx: number,
+): void {
+  const g = document.createElementNS(SVG_NS, "g");
+  g.setAttribute("class", `pad-stamp pad-stamp--${fill}`);
+  g.style.setProperty("--hue", hue.toFixed(1));
+
+  const path = document.createElementNS(SVG_NS, "path");
+  path.setAttribute("d", SHAPE_PATHS[shapeIndex]);
+  g.appendChild(path);
+
+  if (fill === "striped") {
+    const overlay = document.createElementNS(SVG_NS, "path");
+    overlay.setAttribute("d", SHAPE_PATHS[shapeIndex]);
+    overlay.setAttribute("class", "pad-stamp-overlay");
+    g.appendChild(overlay);
+  }
+
+  stamps.appendChild(g);
+
+  // Pop in past the target size with an overshoot ease, then settle back
+  // down and dissolve -- a stamp landing, not just a fade. A small random
+  // tilt keeps repeated shapes from reading as stickers on a grid.
+  const scale = diameterPx / 80;
+  const rotation = (Math.random() - 0.5) * 30;
+  const at = (s: number) =>
+    `translate(${px}px, ${py}px) rotate(${rotation.toFixed(1)}deg) scale(${s.toFixed(3)}) translate(-50px, -50px)`;
+  const anim = g.animate(
+    [
+      { transform: at(scale * 0.4), opacity: 0.9, easing: "cubic-bezier(0.34, 1.56, 0.64, 1)" },
+      { transform: at(scale * 1.2), opacity: 1, offset: 0.35, easing: "ease-in" },
+      { transform: at(scale * 0.8), opacity: 0, offset: 1 },
+    ],
+    { duration: STAMP_FADE_MS, fill: "forwards" },
+  );
+  anim.addEventListener("finish", () => g.remove());
+}
+
+function spawnAttackStamp(x: number, y: number, px: number, py: number): void {
+  const stepIndex = xToStepIndex(x);
+  const degree = stepIndex % SCALE_DEGREES.length;
+  const octave = Math.floor(stepIndex / SCALE_DEGREES.length);
+
+  const now = performance.now();
+  fillCycle[stepIndex] =
+    now - lastAttackAt[stepIndex] < REPEAT_WINDOW_MS
+      ? (fillCycle[stepIndex] + 1) % FILL_STATES.length
+      : 0;
+  lastAttackAt[stepIndex] = now;
+
+  const hue = lerp(260, 20, y);
+  const baseDiameter = octave === 0 ? 34 : 74;
+  const diameterPx = baseDiameter * gainScaleFactor(y);
+  spawnStamp(px, py, degree, FILL_STATES[fillCycle[stepIndex]], hue, diameterPx);
 }
 
 function pointerToFraction(e: PointerEvent): { x: number; y: number; px: number; py: number } {
@@ -198,6 +309,7 @@ pad.addEventListener("pointerdown", (e) => {
   const { x, y, px, py } = pointerToFraction(e);
   noteOn(`p${e.pointerId}`, x, y);
   visualize(px, py, y);
+  spawnAttackStamp(x, y, px, py);
   syncActiveState();
 });
 
@@ -236,7 +348,10 @@ window.addEventListener("keydown", (e) => {
     const x = (index + 0.5) / KEYBOARD_KEYS.length;
     noteOn(`k${key}`, x, keyboardY);
     const rect = pad.getBoundingClientRect();
-    visualize(x * rect.width, (1 - keyboardY) * rect.height, keyboardY);
+    const px = x * rect.width;
+    const py = (1 - keyboardY) * rect.height;
+    visualize(px, py, keyboardY);
+    spawnAttackStamp(x, keyboardY, px, py);
     syncActiveState();
     return;
   }
@@ -317,7 +432,10 @@ function startPlayback(): void {
       const id = `r:${ev.id}`;
       if (ev.kind === "on") {
         noteOn(id, ev.x, ev.y);
-        visualize(ev.x * rect.width, (1 - ev.y) * rect.height, ev.y);
+        const px = ev.x * rect.width;
+        const py = (1 - ev.y) * rect.height;
+        visualize(px, py, ev.y);
+        spawnAttackStamp(ev.x, ev.y, px, py);
       } else if (ev.kind === "update") {
         noteUpdate(id, ev.x, ev.y);
         visualize(ev.x * rect.width, (1 - ev.y) * rect.height, ev.y);
