@@ -206,18 +206,21 @@ a {
 }
 
 .pad-stamp {
-  filter: drop-shadow(0 0 0.5rem hsl(var(--hue) 80% 65% / 0.55));
+  /* Trail stamps set --light lower (see spawnStamp in main.ts) so a drag
+     reads as a dim wake behind the brighter attack stamps, not more of the
+     same brightness piling up. */
+  filter: drop-shadow(0 0 0.5rem hsl(var(--hue) 80% var(--light, 65%) / 0.55));
 }
 
 .pad-stamp--hollow path:first-child {
   fill: none;
-  stroke: hsl(var(--hue) 80% 65%);
+  stroke: hsl(var(--hue) 80% var(--light, 65%));
   stroke-width: 6;
 }
 
 .pad-stamp--solid path:first-child,
 .pad-stamp--striped path:first-child {
-  fill: hsl(var(--hue) 80% 65%);
+  fill: hsl(var(--hue) 80% var(--light, 65%));
   stroke: none;
 }
 

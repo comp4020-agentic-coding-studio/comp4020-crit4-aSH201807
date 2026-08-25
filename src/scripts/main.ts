@@ -78,6 +78,11 @@ interface Voice {
   x: number;
   y: number;
   holdTimer: number;
+  fillState: FillState;
+  lastTrailAt: number;
+  lastTrailX: number;
+  lastTrailY: number;
+  lastStepIndex: number;
 }
 
 const voices = new Map<string, Voice>();
@@ -124,11 +129,11 @@ function ensureAudio(): AudioContext {
   return audioCtx;
 }
 
-function noteOn(id: string, x: number, y: number): void {
+function noteOn(id: string, x: number, y: number, px: number, py: number): void {
   const ctx = ensureAudio();
   if (!masterGain) return;
   if (voices.has(id)) {
-    noteUpdate(id, x, y);
+    noteUpdate(id, x, y, px, py);
     return;
   }
   recordEvent("on", id, x, y);
@@ -148,18 +153,34 @@ function noteOn(id: string, x: number, y: number): void {
   filter.connect(gain);
   gain.connect(masterGain);
   osc.start(now);
-  const voice: Voice = { osc, gain, filter, x, y, holdTimer: 0 };
+  const stepIndex = xToStepIndex(x);
+  const fillState = advanceFillState(stepIndex);
+  const voice: Voice = {
+    osc,
+    gain,
+    filter,
+    x,
+    y,
+    holdTimer: 0,
+    fillState,
+    lastTrailAt: performance.now(),
+    lastTrailX: x,
+    lastTrailY: y,
+    lastStepIndex: stepIndex,
+  };
   voices.set(id, voice);
+  stampAt(x, y, px, py, fillState);
   // While held, keep re-stamping at the current position on the same
   // cadence as a rapid re-tap, so a long press escalates the fill just
   // like tapping the same note repeatedly does.
   voice.holdTimer = window.setInterval(() => {
     const rect = pad.getBoundingClientRect();
-    spawnAttackStamp(voice.x, voice.y, voice.x * rect.width, (1 - voice.y) * rect.height);
+    voice.fillState = advanceFillState(xToStepIndex(voice.x));
+    stampAt(voice.x, voice.y, voice.x * rect.width, (1 - voice.y) * rect.height, voice.fillState);
   }, HOLD_INTERVAL_MS);
 }
 
-function noteUpdate(id: string, x: number, y: number): void {
+function noteUpdate(id: string, x: number, y: number, px: number, py: number): void {
   const voice = voices.get(id);
   if (!voice || !audioCtx) return;
   recordEvent("update", id, x, y);
@@ -170,6 +191,18 @@ function noteUpdate(id: string, x: number, y: number): void {
   voice.gain.gain.setTargetAtTime(peak, now, GLIDE);
   voice.x = x;
   voice.y = y;
+
+  const stepIndex = xToStepIndex(x);
+  const dist = Math.hypot(x - voice.lastTrailX, y - voice.lastTrailY);
+  const crossedStep = stepIndex !== voice.lastStepIndex;
+  const throttleReady = performance.now() - voice.lastTrailAt >= TRAIL_THROTTLE_MS;
+  if (crossedStep || (throttleReady && dist >= TRAIL_MIN_DIST)) {
+    stampAt(x, y, px, py, voice.fillState, 0.65, true);
+    voice.lastTrailAt = performance.now();
+    voice.lastTrailX = x;
+    voice.lastTrailY = y;
+    voice.lastStepIndex = stepIndex;
+  }
 }
 
 function noteOff(id: string): void {
@@ -227,6 +260,18 @@ type FillState = (typeof FILL_STATES)[number];
 const REPEAT_WINDOW_MS = 400;
 const HOLD_INTERVAL_MS = 350;
 const STAMP_FADE_MS = 550;
+// Drag trails reuse the same shapes as attack stamps, but fade fast and sit
+// dim (--light below the attack stamps' fixed 65%) so a drag reads as a wake
+// behind the brighter attack stamps, not more of the same brightness piling
+// up on screen.
+const TRAIL_FADE_MS = 260;
+const TRAIL_LIGHTNESS = 42;
+// A trail stamp fires when the drag crosses into a new scale step, or --
+// between crossings -- once the pointer has moved far enough and enough time
+// has passed since the last trail stamp. Throttling on both distance and
+// time keeps a slow drag from spamming stamps while still tracing a fast one.
+const TRAIL_THROTTLE_MS = 70;
+const TRAIL_MIN_DIST = 0.025;
 const lastAttackAt: number[] = new Array(STEPS.length).fill(-Infinity);
 const fillCycle: number[] = new Array(STEPS.length).fill(0);
 
@@ -239,10 +284,12 @@ function spawnStamp(
   fill: FillState,
   hue: number,
   diameterPx: number,
+  isTrail = false,
 ): void {
   const g = document.createElementNS(SVG_NS, "g");
   g.setAttribute("class", `pad-stamp pad-stamp--${fill}`);
   g.style.setProperty("--hue", hue.toFixed(1));
+  if (isTrail) g.style.setProperty("--light", `${TRAIL_LIGHTNESS}%`);
 
   const path = document.createElementNS(SVG_NS, "path");
   path.setAttribute("d", SHAPE_PATHS[shapeIndex]);
@@ -264,33 +311,52 @@ function spawnStamp(
   const rotation = (Math.random() - 0.5) * 30;
   const at = (s: number) =>
     `translate(${px}px, ${py}px) rotate(${rotation.toFixed(1)}deg) scale(${s.toFixed(3)}) translate(-50px, -50px)`;
+  const peakOpacity = isTrail ? 0.6 : 1;
   const anim = g.animate(
     [
-      { transform: at(scale * 0.4), opacity: 0.9, easing: "cubic-bezier(0.34, 1.56, 0.64, 1)" },
-      { transform: at(scale * 1.2), opacity: 1, offset: 0.35, easing: "ease-in" },
+      {
+        transform: at(scale * 0.4),
+        opacity: peakOpacity * 0.9,
+        easing: "cubic-bezier(0.34, 1.56, 0.64, 1)",
+      },
+      { transform: at(scale * 1.2), opacity: peakOpacity, offset: 0.35, easing: "ease-in" },
       { transform: at(scale * 0.8), opacity: 0, offset: 1 },
     ],
-    { duration: STAMP_FADE_MS, fill: "forwards" },
+    { duration: isTrail ? TRAIL_FADE_MS : STAMP_FADE_MS, fill: "forwards" },
   );
   anim.addEventListener("finish", () => g.remove());
 }
 
-function spawnAttackStamp(x: number, y: number, px: number, py: number): void {
-  const stepIndex = xToStepIndex(x);
-  const degree = stepIndex % SCALE_DEGREES.length;
-  const octave = Math.floor(stepIndex / SCALE_DEGREES.length);
-
+// Attack time (note-on, and each re-fire of a held note) escalates the fill
+// state for that scale step; drag trails reuse whatever fill the gesture is
+// already on instead of re-escalating on every trail tick -- otherwise a
+// slow drag along one step would cycle through fills as fast as a rapid tap.
+function advanceFillState(stepIndex: number): FillState {
   const now = performance.now();
   fillCycle[stepIndex] =
     now - lastAttackAt[stepIndex] < REPEAT_WINDOW_MS
       ? (fillCycle[stepIndex] + 1) % FILL_STATES.length
       : 0;
   lastAttackAt[stepIndex] = now;
+  return FILL_STATES[fillCycle[stepIndex]];
+}
 
+function stampAt(
+  x: number,
+  y: number,
+  px: number,
+  py: number,
+  fill: FillState,
+  sizeMul = 1,
+  isTrail = false,
+): void {
+  const stepIndex = xToStepIndex(x);
+  const degree = stepIndex % SCALE_DEGREES.length;
+  const octave = Math.floor(stepIndex / SCALE_DEGREES.length);
   const hue = lerp(260, 20, y);
   const baseDiameter = octave === 0 ? 34 : 74;
-  const diameterPx = baseDiameter * gainScaleFactor(y);
-  spawnStamp(px, py, degree, FILL_STATES[fillCycle[stepIndex]], hue, diameterPx);
+  const diameterPx = baseDiameter * gainScaleFactor(y) * sizeMul;
+  spawnStamp(px, py, degree, fill, hue, diameterPx, isTrail);
 }
 
 function pointerToFraction(e: PointerEvent): { x: number; y: number; px: number; py: number } {
@@ -307,9 +373,8 @@ pad.classList.add("is-idle");
 pad.addEventListener("pointerdown", (e) => {
   pad.setPointerCapture(e.pointerId);
   const { x, y, px, py } = pointerToFraction(e);
-  noteOn(`p${e.pointerId}`, x, y);
+  noteOn(`p${e.pointerId}`, x, y, px, py);
   visualize(px, py, y);
-  spawnAttackStamp(x, y, px, py);
   syncActiveState();
 });
 
@@ -317,7 +382,7 @@ pad.addEventListener("pointermove", (e) => {
   const id = `p${e.pointerId}`;
   if (!voices.has(id)) return;
   const { x, y, px, py } = pointerToFraction(e);
-  noteUpdate(id, x, y);
+  noteUpdate(id, x, y, px, py);
   visualize(px, py, y);
 });
 
@@ -346,12 +411,11 @@ window.addEventListener("keydown", (e) => {
     if (e.repeat) return;
     const index = KEYBOARD_KEYS.indexOf(key);
     const x = (index + 0.5) / KEYBOARD_KEYS.length;
-    noteOn(`k${key}`, x, keyboardY);
     const rect = pad.getBoundingClientRect();
     const px = x * rect.width;
     const py = (1 - keyboardY) * rect.height;
+    noteOn(`k${key}`, x, keyboardY, px, py);
     visualize(px, py, keyboardY);
-    spawnAttackStamp(x, keyboardY, px, py);
     syncActiveState();
     return;
   }
@@ -362,7 +426,7 @@ window.addEventListener("keydown", (e) => {
     let lastX: number | null = null;
     for (const [id, voice] of voices) {
       if (!id.startsWith("k")) continue;
-      noteUpdate(id, voice.x, keyboardY);
+      noteUpdate(id, voice.x, keyboardY, voice.x * rect.width, (1 - keyboardY) * rect.height);
       lastX = voice.x;
     }
     if (lastX !== null) {
@@ -431,14 +495,15 @@ function startPlayback(): void {
     const timer = window.setTimeout(() => {
       const id = `r:${ev.id}`;
       if (ev.kind === "on") {
-        noteOn(id, ev.x, ev.y);
         const px = ev.x * rect.width;
         const py = (1 - ev.y) * rect.height;
+        noteOn(id, ev.x, ev.y, px, py);
         visualize(px, py, ev.y);
-        spawnAttackStamp(ev.x, ev.y, px, py);
       } else if (ev.kind === "update") {
-        noteUpdate(id, ev.x, ev.y);
-        visualize(ev.x * rect.width, (1 - ev.y) * rect.height, ev.y);
+        const px = ev.x * rect.width;
+        const py = (1 - ev.y) * rect.height;
+        noteUpdate(id, ev.x, ev.y, px, py);
+        visualize(px, py, ev.y);
       } else {
         noteOff(id);
       }
