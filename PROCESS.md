@@ -1,9 +1,5 @@
 # Process overview
 
-<!-- TEMPLATE: this file is a shape to fill in, not a form. Replace everything
-     in it with your own overview, and delete this comment — `pnpm
-     check:evidence` will remind you if it's still here. -->
-
 A reading-guide to how the work came together --- a map to your process, not an
 essay about it. Markers read this file and follow its citations; they don't
 trawl the repo for evidence you didn't point at, so if a moment mattered, cite
@@ -17,60 +13,75 @@ cover every deliverable.
 
 ## What I built
 
-One paragraph: the thing, and the idea behind it.
+A browser-based instrument: an XY pad you drag, tap, or play with the
+keyboard, where X is quantized to a two-octave pentatonic scale (so there is
+no wrong note) and Y drives loudness and filter brightness together, all
+synthesised live through the Web Audio API rather than played back from a
+file. Every note-on stamps a shape onto the pad --- which scale degree by which
+polygon, repeated taps or a held note by escalating fill (hollow, then solid,
+then striped) --- and dragging leaves a trail of smaller, dimmer, faster-fading
+stamps so a slide reads as a continuous gesture. A record button captures a
+phrase (pitch, glide, and timing) and a playback button replays it through the
+same live synth path a second later, so you can hear a phrase back or play
+over your own recording.
 
 ## The moments that mattered
 
-Three or four for an assignment; fewer is fine for a weekly prototype. Keep the
-list short so each moment has room to do all four jobs:
+1. **Quantizing pitch instead of trusting the ear.** The spec rules out a
+   fail state or wrong notes, and the obvious approach --- map Y position
+   continuously to frequency --- makes that a matter of taste, not structure:
+   a player can still land between notes and it just sounds off. Instead,
+   `xToStepIndex` floors the X position onto one of ten fixed pentatonic
+   steps (`SCALE_DEGREES` across two octaves), so every possible drag or key
+   lands on a real note by construction, not by luck. Verified against
+   `spec/instrument.test.ts`'s playability checks and by ear: dragging fast
+   across the pad glides between discrete pitches, it never lands on a
+   dissonant interval.
+   [`9b5c21f`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit4-aSH201807/commit/9b5c21f)
 
-1. **what happened** --- the problem, or the thing that went wrong
-2. **what you did instead of the obvious thing** --- the call you made, and why
-   it beat the obvious one
-3. **how you knew it was right** --- the check you ran, the viewport you looked
-   at, what you read before accepting the diff
-4. **the citation** --- a commit or commit range, a `CLAUDE.md` change, a check
-   that went from red to green, a prompt paired with the commit it produced
+2. **Playback replays control data, not audio.** The easy way to add
+   record/playback is to capture a `MediaRecorder` audio buffer and hand it
+   back through an `<audio>` element --- except the spec explicitly rules out
+   a static `<audio>`/`<video>` source, since the point is that sound is made
+   live in the page. Instead, `recordEvent` taps the existing
+   `noteOn`/`noteUpdate`/`noteOff` call sites and stores timestamped control
+   events; `startPlayback` schedules those same three functions again later,
+   with ids prefixed `r:` so a played-back phrase can never collide with (or
+   block) whatever is played live at the same moment. Verified manually:
+   recorded a phrase, played it back and watched the cursor re-trace it while
+   dragging live on top of it at the same time, with neither voice getting
+   stuck or cut off; `spec/instrument.test.ts`'s
+   "no `<audio>`/`<video>`" assertion stayed green throughout.
+   [`15be001`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit4-aSH201807/commit/15be001)
 
-Jobs 2 and 3 are the ones the repo can't tell a reader on its own, so they're
-where the marks are. The strongest moments are the ones where a correction
-landed in the **harness** --- the standards and checks your work has to satisfy
---- rather than in a retry: a rule added to `CLAUDE.md`, a check wired up, an
-attempt thrown away. Retrying until it passes is the routine case, and changing
-what the work runs against is the skilled one.
+3. **Escalating fill by scale step, not by voice id.** For the shape/fill
+   stamp system, the obvious counter to reach for is per-voice-id (per
+   finger, per key) --- but that would mean the same physical note played by a
+   different finger or key always starts back at "hollow," which doesn't
+   read as the same note being repeated. Instead `fillCycle`/`lastAttackAt`
+   are keyed by scale step index, so cycling hollow → solid → striped tracks
+   "the same pitch again" regardless of which input produced it, and a held
+   note re-fires the same check on an interval shorter than the repeat
+   window, so holding escalates exactly like rapid tapping does. Verified via
+   `pnpm check` (typecheck, build, and the full spec suite green) and by
+   playing the same key repeatedly versus alternating two keys on the same
+   scale step in a real browser.
+   [`39dcf30`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit4-aSH201807/commit/39dcf30)
 
-Cite each moment as a link whose text is the commit hash or range and whose
-target is this repo's commit or compare URL, so a reader clicks straight to the
-evidence:
-
-- one commit: [`a1b2c3d`](https://github.com/YOUR-ORG/YOUR-REPO/commit/a1b2c3d)
-- a range:
-  [`a1b2c3d...e4f5a6b`](https://github.com/YOUR-ORG/YOUR-REPO/compare/a1b2c3d...e4f5a6b)
-
-To pair a prompt with the commit it produced, quote the prompt (curated, not a
-full transcript) next to the citation:
-
-> the prompt, verbatim
-
-Screenshots are welcome where one carries the verification better than a
-sentence does. Commit the file to this repo and link it with a **relative**
-path, which is what makes it render on GitHub: `![alt text](docs/before.png)`.
-Images don't count towards the word count and don't replace the citation.
-
-### A worked moment, for shape
-
-Delete this section along with the rest of the boilerplate --- it's here to show
-the four jobs in one paragraph, not to be imitated in content.
-
-> The date formatter kept coming back with `toLocaleDateString()` and no locale
-> argument, so the same build rendered differently on my machine and in CI. I'd
-> already re-prompted it twice, which fixed the line but not the habit, so the
-> third time I put the rule in `CLAUDE.md` instead
-> ([`3f9ac21`](https://github.com/YOUR-ORG/YOUR-REPO/commit/3f9ac21)) and added
-> a spec test that fails on a bare `toLocaleDateString`. That's what told me it
-> had actually taken: the test went red against the old code and green against
-> the new, and the next two features it wrote passed it without prompting
-> ([`3f9ac21...b7e0d14`](https://github.com/YOUR-ORG/YOUR-REPO/compare/3f9ac21...b7e0d14)).
+4. **Tuning the drag trail from feedback, not a guess.** Stamping on every
+   `pointermove` would flood the pad with shapes, so drag trails are gated on
+   a hybrid rule: always stamp on crossing into a new scale step, otherwise
+   only once enough time and distance have passed. After trying it, the
+   actual problem wasn't the trigger rate --- it was that trail stamps looked
+   identical to attack stamps, so a drag read as a pile-up of full-brightness
+   shapes. Rather than throttling harder (which would make a fast drag look
+   sparse), `isTrail` stamps were given their own shorter fade duration and a
+   lower `--light` CSS value, so trails read as a dim wake behind the
+   brighter attack stamps instead of more of the same. Verified with
+   `pnpm check` green, and by dragging across the pad in the browser before
+   and after the change to confirm the trail was visibly calmer without
+   losing the sense of a continuous gesture.
+   [`d3bf7c7`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit4-aSH201807/commit/d3bf7c7)
 
 ## Before you ship
 
