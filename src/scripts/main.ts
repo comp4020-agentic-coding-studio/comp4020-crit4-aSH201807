@@ -6,13 +6,17 @@
 const startButtonEl = document.getElementById("start");
 const padEl = document.getElementById("pad");
 const cursorEl = document.getElementById("cursor");
+const recordButtonEl = document.getElementById("record");
+const playButtonEl = document.getElementById("playback");
 
 if (
   !(startButtonEl instanceof HTMLButtonElement) ||
   !(padEl instanceof HTMLDivElement) ||
-  !(cursorEl instanceof HTMLDivElement)
+  !(cursorEl instanceof HTMLDivElement) ||
+  !(recordButtonEl instanceof HTMLButtonElement) ||
+  !(playButtonEl instanceof HTMLButtonElement)
 ) {
-  throw new Error("instrument: expected #start, #pad and #cursor in the DOM");
+  throw new Error("instrument: expected #start, #pad, #cursor, #record and #playback in the DOM");
 }
 
 // Re-bind to non-nullable consts: narrowing above doesn't survive into the
@@ -20,6 +24,8 @@ if (
 const startButton: HTMLButtonElement = startButtonEl;
 const pad: HTMLDivElement = padEl;
 const cursor: HTMLDivElement = cursorEl;
+const recordButton: HTMLButtonElement = recordButtonEl;
+const playButton: HTMLButtonElement = playButtonEl;
 
 function clamp(value: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, value));
@@ -65,6 +71,27 @@ const ATTACK = 0.02;
 const RELEASE = 0.12;
 const GLIDE = 0.05;
 
+type RecordedEvent =
+  | { t: number; kind: "on"; id: string; x: number; y: number }
+  | { t: number; kind: "update"; id: string; x: number; y: number }
+  | { t: number; kind: "off"; id: string };
+
+let recording = false;
+let recordStart = 0;
+let recordedEvents: RecordedEvent[] = [];
+let playing = false;
+let playbackTimers: number[] = [];
+
+function recordEvent(kind: RecordedEvent["kind"], id: string, x?: number, y?: number): void {
+  if (!recording) return;
+  const t = performance.now() - recordStart;
+  if (kind === "off") {
+    recordedEvents.push({ t, kind, id });
+  } else {
+    recordedEvents.push({ t, kind, id, x: x ?? 0, y: y ?? 0 });
+  }
+}
+
 let audioCtx: AudioContext | null = null;
 let masterGain: GainNode | null = null;
 
@@ -90,6 +117,7 @@ function noteOn(id: string, x: number, y: number): void {
     noteUpdate(id, x, y);
     return;
   }
+  recordEvent("on", id, x, y);
   const osc = ctx.createOscillator();
   osc.type = "triangle";
   const filter = ctx.createBiquadFilter();
@@ -112,6 +140,7 @@ function noteOn(id: string, x: number, y: number): void {
 function noteUpdate(id: string, x: number, y: number): void {
   const voice = voices.get(id);
   if (!voice || !audioCtx) return;
+  recordEvent("update", id, x, y);
   const now = audioCtx.currentTime;
   const { gain: peak, cutoff } = yToParams(y);
   voice.osc.frequency.setTargetAtTime(xyToFreq(x), now, GLIDE);
@@ -124,6 +153,7 @@ function noteUpdate(id: string, x: number, y: number): void {
 function noteOff(id: string): void {
   const voice = voices.get(id);
   if (!voice || !audioCtx) return;
+  recordEvent("off", id);
   const now = audioCtx.currentTime;
   const { osc, gain, filter } = voice;
   gain.gain.cancelScheduledValues(now);
@@ -260,4 +290,76 @@ startButton.addEventListener("click", () => {
   }
   startButton.setAttribute("aria-pressed", String(muted));
   startButton.textContent = muted ? "\u{1F507} Muted" : "\u{1F50A} Mute";
+});
+
+// Playback replays a recording through the same noteOn/noteUpdate/noteOff
+// used for live input, with ids prefixed "r:" so it can never collide with
+// (and never blocks) whatever's playing live at the same time.
+function stopPlayback(): void {
+  for (const timer of playbackTimers) clearTimeout(timer);
+  playbackTimers = [];
+  for (const id of [...voices.keys()]) {
+    if (id.startsWith("r:")) noteOff(id);
+  }
+  playing = false;
+  playButton.textContent = "\u{25B6} Play recording";
+  syncActiveState();
+}
+
+function startPlayback(): void {
+  if (recordedEvents.length === 0 || playing) return;
+  playing = true;
+  playButton.textContent = "⏹ Stop";
+  ensureAudio();
+  const rect = pad.getBoundingClientRect();
+  for (const ev of recordedEvents) {
+    const timer = window.setTimeout(() => {
+      const id = `r:${ev.id}`;
+      if (ev.kind === "on") {
+        noteOn(id, ev.x, ev.y);
+        visualize(ev.x * rect.width, (1 - ev.y) * rect.height, ev.y);
+      } else if (ev.kind === "update") {
+        noteUpdate(id, ev.x, ev.y);
+        visualize(ev.x * rect.width, (1 - ev.y) * rect.height, ev.y);
+      } else {
+        noteOff(id);
+      }
+      syncActiveState();
+    }, ev.t);
+    playbackTimers.push(timer);
+  }
+  const lastEvent = recordedEvents[recordedEvents.length - 1];
+  const endTimer = window.setTimeout(
+    () => {
+      playing = false;
+      playButton.textContent = "\u{25B6} Play recording";
+    },
+    lastEvent.t + RELEASE * 1000 + 50,
+  );
+  playbackTimers.push(endTimer);
+}
+
+recordButton.addEventListener("click", () => {
+  if (playing) return;
+  if (!recording) {
+    recording = true;
+    recordedEvents = [];
+    recordStart = performance.now();
+    recordButton.textContent = "⏺ Stop recording";
+    recordButton.setAttribute("aria-pressed", "true");
+    playButton.disabled = true;
+    pad.classList.add("is-recording");
+  } else {
+    recording = false;
+    recordButton.textContent = "⏺ Record";
+    recordButton.setAttribute("aria-pressed", "false");
+    pad.classList.remove("is-recording");
+    playButton.disabled = recordedEvents.length === 0;
+  }
+});
+
+playButton.addEventListener("click", () => {
+  if (recording) return;
+  if (playing) stopPlayback();
+  else startPlayback();
 });

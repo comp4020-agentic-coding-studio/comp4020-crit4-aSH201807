@@ -15,11 +15,20 @@ import Layout from "../layouts/Layout.astro";
     <h1>An instrument</h1>
     <p class="instrument-hint">
       Drag the pad, or play <kbd>a s d f g h j k l ;</kbd> with
-      <kbd>&uarr;</kbd>/<kbd>&darr;</kbd> for brightness.
+      <kbd>&uarr;</kbd>/<kbd>&darr;</kbd> for brightness. &#9210; records a
+      phrase to play back.
     </p>
-    <button id="start" class="start-button" type="button" aria-pressed="false">
-      &#9658; Play
-    </button>
+    <div class="transport">
+      <button id="start" class="start-button" type="button" aria-pressed="false">
+        &#9658; Play
+      </button>
+      <button id="record" class="record-button" type="button" aria-pressed="false">
+        &#9210; Record
+      </button>
+      <button id="playback" class="playback-button" type="button" disabled>
+        &#9658; Play recording
+      </button>
+    </div>
     <div
       id="pad"
       class="pad"
